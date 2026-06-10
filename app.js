@@ -628,9 +628,49 @@ function getWorkerPool() {
  * Also falls back if Worker construction failed entirely (e.g., very old
  * browser or file:// scheme).
  */
+/**
+ * Pick the best available decoder for this file.
+ *
+ * The browser's native createImageBitmap is the fastest path for anything
+ * the OS supports — including HEIC on Safari (all platforms) and Chrome on
+ * macOS, which use the system codec. CRITICALLY this only works on the
+ * MAIN thread: Web Workers don't have access to the system image codecs,
+ * so iPhone Safari + Chrome-on-Mac HEIC must be decoded here, not inside
+ * a worker. (That's why HEIC kept failing instantly — the worker tried
+ * a path that's simply unavailable to it.)
+ *
+ * If the OS doesn't natively decode this file (typically: HEIC on
+ * Chrome/Edge on Windows/Linux, or any browser on those OSes for HEIC),
+ * we hand it off to a worker which loads libheif-js (WASM) and decodes
+ * there. That keeps the slow JS path off the main thread.
+ */
 async function loadImageInWorker(file) {
+  // 1. Native main-thread decode (system codecs available here).
+  try {
+    const t0 = performance.now();
+    const bitmap = await createImageBitmap(file);
+    const thumbBlob = await makeThumbnailBlob(bitmap, THUMB_MAX_PX, THUMB_JPEG_Q);
+    const w = bitmap.width;
+    const h = bitmap.height;
+    bitmap.close?.();
+    console.log(`[PhotoGrid] ${file.name}: native, ${Math.round(performance.now() - t0)}ms`);
+    return {
+      sourceBlob: file,
+      previewUrl: URL.createObjectURL(thumbBlob),
+      w, h,
+    };
+  } catch (eNative) {
+    console.log(`[PhotoGrid] ${file.name}: native decode failed (${eNative.message || eNative}), trying worker libheif`);
+  }
+
+  // 2. Native decode failed. If it's HEIC, hand off to worker for libheif.
+  if (!looksHeicLike(file)) {
+    throw new Error(`Format not supported: ${file.name}`);
+  }
   const pool = getWorkerPool();
-  if (!pool.length) return loadImageOnMainThread(file);
+  if (!pool.length) {
+    throw new Error("HEIC needs Web Workers, but they're unavailable in this browser.");
+  }
 
   const worker = pool[_workerRR++ % pool.length];
   const id = ++_workerSeq;
@@ -643,9 +683,6 @@ async function loadImageInWorker(file) {
       reject(e);
     }
   });
-  // Log which decode tier was used so we can diagnose slow batches —
-  // open DevTools → Console while ingesting and you'll see e.g.
-  //   [PhotoGrid] IMG_1234.HEIC: ImageDecoder, 80ms
   if (result.decoder) {
     console.log(`[PhotoGrid] ${file.name}: ${result.decoder}, ${result.took}ms`);
   }
@@ -655,6 +692,13 @@ async function loadImageInWorker(file) {
     w: result.w,
     h: result.h,
   };
+}
+
+function looksHeicLike(file) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const heicExts = ["heic", "heif", "hif", "heics", "heifs"];
+  const heicMimes = ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"];
+  return heicExts.includes(ext) || heicMimes.includes(file.type || "");
 }
 
 /** Main-thread fallback used when Web Workers aren't available. */
