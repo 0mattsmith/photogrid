@@ -621,8 +621,12 @@ function getWorkerPool() {
  * Send a file to the next worker (round-robin) and return its decoded
  * source blob + thumbnail blob + natural dimensions.
  *
- * Falls back to main-thread decoding if Worker construction failed
- * (e.g., page opened from file:// without a server, or very old browser).
+ * If the worker reports it can't handle the format (typically: HEIC on a
+ * browser without native HEIC, since heic2any uses document.createElement
+ * and can't run in a worker), fall back to main-thread decoding.
+ *
+ * Also falls back if Worker construction failed entirely (e.g., very old
+ * browser or file:// scheme).
  */
 async function loadImageInWorker(file) {
   const pool = getWorkerPool();
@@ -639,6 +643,9 @@ async function loadImageInWorker(file) {
       reject(e);
     }
   });
+  if (result.fallback) {
+    return loadImageOnMainThread(file);
+  }
   return {
     sourceBlob: result.sourceBlob,
     previewUrl: URL.createObjectURL(result.thumbBlob),

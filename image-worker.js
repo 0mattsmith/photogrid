@@ -1,25 +1,17 @@
 /*
  * image-worker.js — runs in a Web Worker.
  *
- * Decodes any incoming image file off the main thread and returns:
- *   - sourceBlob: the original file (or a HEIC->JPEG conversion of it),
- *     used at export time for high-resolution cropping.
+ * Decodes any browser-native image format off the main thread and returns:
+ *   - sourceBlob: the original file, kept for export-time cropping.
  *   - thumbBlob:  a small JPEG thumbnail used everywhere on screen.
- *   - w, h:       natural dimensions of the source.
+ *   - w, h:       natural dimensions.
  *
- * Decoding strategy:
- *   1. Try the browser's native createImageBitmap on the file.
- *      This works for JPG/PNG/WebP/AVIF universally, and for HEIC on
- *      Safari and Chrome on macOS (which now ship native HEIC). When it
- *      works it's ~10× faster than the JS HEIC decoder.
- *   2. Only if native decode fails AND the file looks HEIC, lazy-load
- *      heic2any (libheif compiled to JS), convert to JPEG, then bitmap that.
- *
- * Multiple workers run in parallel, so the user sees a steady stream of
- * completions instead of one long freeze.
+ * Native createImageBitmap handles JPG/PNG/WebP/AVIF universally, and HEIC
+ * on Safari + Chrome-on-macOS (which now ship a system HEIC decoder).
+ * For HEIC files on browsers WITHOUT native support, we report
+ * { fallback: true } so the main thread can run the JS HEIC decoder
+ * (heic2any), which uses document.createElement and therefore can't run here.
  */
-
-const HEIC2ANY_URL = "https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js";
 
 function looksLikeHeic(file) {
   const name = (file && file.name) || "";
@@ -27,28 +19,6 @@ function looksLikeHeic(file) {
   const heicExts = ["heic", "heif", "hif", "heics", "heifs"];
   const heicMimes = ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"];
   return heicExts.includes(ext) || heicMimes.includes(file?.type || "");
-}
-
-async function ensureHeic2Any() {
-  if (typeof heic2any === "function") return;
-  importScripts(HEIC2ANY_URL);
-}
-
-async function decode(file) {
-  // Path 1 — try native decode (fast, off-main-thread for the browser too).
-  try {
-    return { bitmap: await createImageBitmap(file), sourceBlob: file };
-  } catch (_) { /* fall through */ }
-
-  // Path 2 — HEIC fallback via heic2any.
-  if (!looksLikeHeic(file)) {
-    throw new Error("Image format not supported by this browser.");
-  }
-  await ensureHeic2Any();
-  let converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
-  if (Array.isArray(converted)) converted = converted[0];
-  const bitmap = await createImageBitmap(converted);
-  return { bitmap, sourceBlob: converted };
 }
 
 async function makeThumbBlob(bitmap, maxDim, jpegQ) {
@@ -67,12 +37,23 @@ self.onmessage = async (e) => {
   const { id, file, thumbMax, thumbQ } = e.data || {};
   if (!id) return;
   try {
-    const { bitmap, sourceBlob } = await decode(file);
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch (err) {
+      // Native decode failed. If it's HEIC, ask the main thread to handle it
+      // via heic2any (which needs document.createElement and can't run here).
+      if (looksLikeHeic(file)) {
+        self.postMessage({ id, fallback: true });
+        return;
+      }
+      throw new Error(`Image format not supported: ${file.name}`);
+    }
     const w = bitmap.width;
     const h = bitmap.height;
     const thumbBlob = await makeThumbBlob(bitmap, thumbMax, thumbQ);
     bitmap.close && bitmap.close();
-    self.postMessage({ id, sourceBlob, thumbBlob, w, h });
+    self.postMessage({ id, sourceBlob: file, thumbBlob, w, h });
   } catch (err) {
     self.postMessage({ id, error: err && (err.message || String(err)) || "Decode failed" });
   }
