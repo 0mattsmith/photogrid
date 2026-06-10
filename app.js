@@ -643,9 +643,6 @@ async function loadImageInWorker(file) {
       reject(e);
     }
   });
-  if (result.fallback) {
-    return loadImageOnMainThread(file);
-  }
   return {
     sourceBlob: result.sourceBlob,
     previewUrl: URL.createObjectURL(result.thumbBlob),
