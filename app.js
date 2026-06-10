@@ -643,6 +643,12 @@ async function loadImageInWorker(file) {
       reject(e);
     }
   });
+  // Log which decode tier was used so we can diagnose slow batches —
+  // open DevTools → Console while ingesting and you'll see e.g.
+  //   [PhotoGrid] IMG_1234.HEIC: ImageDecoder, 80ms
+  if (result.decoder) {
+    console.log(`[PhotoGrid] ${file.name}: ${result.decoder}, ${result.took}ms`);
+  }
   return {
     sourceBlob: result.sourceBlob,
     previewUrl: URL.createObjectURL(result.thumbBlob),
