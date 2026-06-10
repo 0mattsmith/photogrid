@@ -45,11 +45,56 @@ body {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
 }
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
-.topbar .hint { color: var(--text-muted); font-size: 12px; }
+.topbar .hint { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+
+/* "Photos stay local" reassurance badge */
+.privacy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 170, 80, 0.12);
+  color: #1e8a47;
+  border: 1px solid rgba(0, 170, 80, 0.32);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+}
+.privacy-badge .lock-icon {
+  display: inline-block;
+  vertical-align: middle;
+}
+@media (prefers-color-scheme: dark) {
+  .privacy-badge {
+    background: rgba(60, 220, 130, 0.12);
+    color: #6fdc99;
+    border-color: rgba(60, 220, 130, 0.3);
+  }
+}
+
+/* Tiny dot showing online/offline status. Hover reveals detail. */
+.net-indicator {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  color: #1e8a47;
+  cursor: default;
+  user-select: none;
+}
+.net-indicator.offline { color: var(--text-muted); }
+.net-indicator.offline::after {
+  content: " offline";
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
 
 /* Two-pane layout */
 .layout {

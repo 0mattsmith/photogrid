@@ -4,12 +4,24 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PhotoGrid</title>
+  <meta name="description" content="Arrange photos in a printable grid (4×5, square cells), export to PDF or Word. Everything runs locally in your browser — nothing is uploaded." />
+  <meta name="theme-color" content="#0a84ff" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon.svg" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
     <h1>PhotoGrid</h1>
+    <span class="privacy-badge" title="Images are processed entirely on this device. No upload, no server, no analytics.">
+      <svg class="lock-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+        <path fill="currentColor" d="M8 1a3 3 0 0 0-3 3v3H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-1V4a3 3 0 0 0-3-3Zm-2 6V4a2 2 0 1 1 4 0v3H6Z"/>
+      </svg>
+      100% local — your photos never leave this device
+    </span>
     <span class="hint" id="statusBar">Drop photos anywhere to begin</span>
+    <span class="net-indicator" id="netIndicator" title="">●</span>
   </header>
 
   <main class="layout" id="dropTarget">
@@ -130,5 +142,16 @@
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js" defer></script>
 
   <script src="app.js" defer></script>
+
+  <!-- Register the service worker for offline use. -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js")
+          .then(() => console.log("[PhotoGrid] Service worker registered — offline ready"))
+          .catch((e) => console.warn("[PhotoGrid] SW registration failed:", e));
+      });
+    }
+  </script>
 </body>
 </html>

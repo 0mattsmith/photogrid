@@ -2,7 +2,19 @@
 
 Drag photos in, arrange them in a customisable grid (default 4 × 5), crop each photo to a square cell (default 4.4 cm × 4.4 cm) with per-image pan adjustment, export to PDF or DOCX.
 
-Runs entirely in the browser — no upload, no server. Works on Chrome, Safari, Firefox, Edge.
+## Privacy
+
+**Your photos never leave this device.** Everything — decoding HEIC, cropping, generating PDF/DOCX — runs inside your browser. There is no server, no upload, no analytics, no telemetry. The only network requests the page ever makes are to load the app code itself (HTML/CSS/JS and a handful of library files), and after the first visit those are cached, so subsequent loads make zero network requests for your photos or anything else.
+
+You can verify this yourself by opening DevTools → Network while you drop photos in. Nothing fires.
+
+## Offline
+
+PhotoGrid is a PWA. After your first visit:
+
+- The app shell and all libraries are cached by a service worker, so it loads and works fully **with no internet connection**.
+- You can install it (Chrome/Edge: "Install app"; Safari iOS: Share → Add to Home Screen) to run it like a native app.
+- A tiny dot in the top-right shows your connection state — green = online, grey + "offline" label = offline. Either way, the app works the same.
 
 ## Quick deploy with the GitHub CLI
 

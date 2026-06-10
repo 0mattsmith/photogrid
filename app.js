@@ -79,6 +79,7 @@ const els = {
   cropImage:   $("cropImage"),
   cropName:    $("cropName"),
   btnResetCrop:$("btnResetCrop"),
+  netIndicator:$("netIndicator"),
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────
@@ -87,8 +88,27 @@ document.addEventListener("DOMContentLoaded", () => {
   syncControlsFromState();
   attachEventListeners();
   attachCropDragHandlers();
+  initNetworkIndicator();
   render();
 });
+
+// ─── Online/offline indicator ─────────────────────────────────────────────
+// Cosmetic only — the app works the same whether online or offline because
+// no photo data ever leaves this browser. The indicator just confirms that
+// to the user.
+
+function initNetworkIndicator() {
+  const update = () => {
+    const online = navigator.onLine;
+    els.netIndicator.classList.toggle("offline", !online);
+    els.netIndicator.title = online
+      ? "Online — but your photos still stay on this device."
+      : "Offline — app and libraries are cached, photos still process locally.";
+  };
+  window.addEventListener("online",  update);
+  window.addEventListener("offline", update);
+  update();
+}
 
 function setStatus(text) { els.status.textContent = text; }
 function showBusy(text)  { els.busyText.textContent = text || "Working…"; els.busy.hidden = false; }
