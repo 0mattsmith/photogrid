@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhotoGrid</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>PhotoGrid</h1>
+    <span class="hint" id="statusBar">Drop photos anywhere to begin</span>
+  </header>
+
+  <main class="layout" id="dropTarget">
+    <!-- LEFT: file pane -->
+    <aside class="pane pane-left">
+      <h2>Photos</h2>
+      <p class="muted">Drop image files (JPG, PNG, HEIC, WEBP, AVIF...) anywhere in the window, or use the buttons below.</p>
+
+      <ol class="filelist" id="fileList" tabindex="0" aria-label="Photo list"></ol>
+
+      <div class="btn-row">
+        <button id="btnUp" type="button" title="Move up (⌘↑)">▲ Up</button>
+        <button id="btnDown" type="button" title="Move down (⌘↓)">▼ Down</button>
+        <button id="btnRemove" type="button" title="Remove (⌫)">Remove</button>
+      </div>
+      <div class="btn-row">
+        <button id="btnAdd" type="button" class="primary">Add files…</button>
+        <button id="btnClear" type="button">Clear all</button>
+      </div>
+      <input type="file" id="fileInput" accept="image/*,.heic,.heif,.avif" multiple hidden />
+
+      <!-- Per-image crop editor — visible when a photo is selected. -->
+      <section class="crop-editor" id="cropEditor" hidden>
+        <h3>Crop <span id="cropName" class="muted-inline"></span></h3>
+        <p class="muted">Drag the image to choose what fits in the square.</p>
+        <div class="crop-frame" id="cropFrame">
+          <div class="crop-image" id="cropImage"></div>
+        </div>
+        <div class="btn-row">
+          <button id="btnResetCrop" type="button">Reset crop</button>
+        </div>
+      </section>
+    </aside>
+
+    <!-- RIGHT: preview + controls -->
+    <section class="pane pane-right">
+      <h2>Document preview</h2>
+      <div class="preview-scroll" id="previewScroll">
+        <div class="preview-stack" id="previewStack"></div>
+      </div>
+
+      <fieldset class="controls">
+        <legend>Layout</legend>
+
+        <div class="ctrl-row">
+          <label>Rows
+            <input id="ctlRows" type="number" min="1" max="30" value="5" />
+          </label>
+          <label>Columns
+            <input id="ctlCols" type="number" min="1" max="30" value="4" />
+          </label>
+          <label>Cell size
+            <input id="ctlCellCm" type="number" min="1" max="20" step="0.1" value="4.4" /> cm
+          </label>
+          <label>Page
+            <select id="ctlPage">
+              <option value="A4">A4</option>
+              <option value="Letter">Letter</option>
+              <option value="Legal">Legal</option>
+            </select>
+          </label>
+          <label>Orientation
+            <select id="ctlOrient">
+              <option value="portrait">portrait</option>
+              <option value="landscape">landscape</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="ctrl-row">
+          <label class="grow">Margins
+            <input id="ctlMargin" type="range" min="0" max="40" step="1" value="12" />
+            <output id="outMargin">12 mm</output>
+          </label>
+          <label class="grow">Spacing
+            <input id="ctlSpacing" type="range" min="0" max="20" step="1" value="3" />
+            <output id="outSpacing">3 mm</output>
+          </label>
+        </div>
+
+        <div class="ctrl-row">
+          <label class="check">
+            <input id="ctlTrim" type="checkbox" checked />
+            Trim unused empty rows on the last page
+          </label>
+          <label class="check">
+            <input id="ctlSquareCrop" type="checkbox" checked />
+            Center-crop images to fit cells (square)
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="btn-row export-row">
+        <button id="btnExportPdf" type="button" class="primary">Export PDF…</button>
+        <button id="btnExportDocx" type="button" class="primary">Export Word…</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="overlay" id="dropOverlay" hidden>
+    <div class="overlay-inner">Drop photos to add them</div>
+  </div>
+
+  <div class="overlay busy" id="busyOverlay" hidden>
+    <div class="overlay-inner">
+      <div class="spinner"></div>
+      <div id="busyText">Working…</div>
+    </div>
+  </div>
+
+  <!-- HEIC -> JPEG decoder (libheif compiled to wasm). Loaded on demand. -->
+  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js" defer></script>
+  <!-- PDF export -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" defer></script>
+  <!-- DOCX export -->
+  <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js" defer></script>
+  <!-- File saver -->
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js" defer></script>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
