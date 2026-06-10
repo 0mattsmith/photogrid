@@ -112,6 +112,17 @@
             Center-crop images to fit cells (square)
           </label>
         </div>
+
+        <div class="ctrl-row">
+          <label>Export quality
+            <select id="ctlQuality" title="Lower quality settings produce dramatically smaller files — like Word's 'Reduce File Size'.">
+              <option value="print">Print — 300 DPI, best quality</option>
+              <option value="reduced">Reduced — 200 DPI, smaller file</option>
+              <option value="minimum">Minimum — 110 DPI, smallest file</option>
+            </select>
+          </label>
+          <span class="muted small">Lower values shrink the exported PDF/DOCX significantly.</span>
+        </div>
       </fieldset>
 
       <div class="btn-row export-row">

@@ -25,7 +25,15 @@ const PAGE_SIZES_MM = {
 };
 
 const state = {
-  images: [],            // { id, file, name, dataUrl, croppedDataUrl, w, h, error? }
+  images: [],
+  // Per-image record:
+  //   { id, file, name, loading?, error?,
+  //     sourceBlob,     // original image (or HEIC->JPEG conversion) used for export
+  //     previewUrl,     // ObjectURL to a small thumbnail blob — used on screen
+  //     w, h,           // natural dimensions of the source image
+  //     cropAnchor: {x, y},  // 0..1 each, drag-to-pan crop offset
+  //     croppedDataUrl, croppedKey   // export crop cache
+  //   }
   selectedId: null,
   settings: {
     rows: 5,
@@ -37,8 +45,27 @@ const state = {
     spacingMm: 3,
     trimEmptyRows: true,
     squareCrop: true,
+    // "Reduce File Size" — like MS Word's option. Controls DPI + JPEG quality
+    // used when rendering crops for export. Has no effect on the on-screen
+    // preview, which always uses the small thumbnail.
+    outputQuality: "print",  // "print" | "reduced" | "minimum"
   },
 };
+
+// DPI + JPEG quality profile for each output-quality preset.
+const QUALITY_PROFILES = {
+  print:   { dpi: 300, jpeg: 0.92, label: "Print" },
+  reduced: { dpi: 200, jpeg: 0.82, label: "Reduced" },
+  minimum: { dpi: 110, jpeg: 0.72, label: "Minimum" },
+};
+
+// Thumbnail size used everywhere on screen. ~800px is plenty for retina
+// display at the cell sizes we use, and keeps rendering and memory cheap.
+const THUMB_MAX_PX = 800;
+const THUMB_JPEG_Q = 0.85;
+
+// Image ingestion concurrency — too high and HEIC decode contends with itself.
+const INGEST_CONCURRENCY = 3;
 
 let _idCounter = 0;
 const nextId = () => `img_${++_idCounter}`;
@@ -70,6 +97,7 @@ const els = {
   outSpacing:  $("outSpacing"),
   ctlTrim:     $("ctlTrim"),
   ctlSquareCrop: $("ctlSquareCrop"),
+  ctlQuality:  $("ctlQuality"),
   btnExportPdf:  $("btnExportPdf"),
   btnExportDocx: $("btnExportDocx"),
   busy:        $("busyOverlay"),
@@ -129,6 +157,7 @@ function syncControlsFromState() {
   els.outSpacing.value  = `${s.spacingMm} mm`;
   els.ctlTrim.checked   = s.trimEmptyRows;
   els.ctlSquareCrop.checked = s.squareCrop;
+  els.ctlQuality.value  = s.outputQuality;
 }
 
 function attachEventListeners() {
@@ -143,7 +172,7 @@ function attachEventListeners() {
   });
   els.ctlCellCm.addEventListener("input", () => {
     state.settings.cellSizeCm = clamp(parseFloat(els.ctlCellCm.value) || 1, 0.5, 20);
-    // Live preview reads dataUrl with bg-position so it updates instantly.
+    // Live preview reads the thumbnail with bg-position so it updates instantly.
     // Cached export crops at the old size are now stale — invalidate them;
     // they'll be regenerated lazily on the next export.
     for (const im of state.images) { im.croppedDataUrl = null; im.croppedKey = null; }
@@ -167,6 +196,12 @@ function attachEventListeners() {
     for (const im of state.images) { im.croppedDataUrl = null; im.croppedKey = null; }
     render();
   });
+  els.ctlQuality.addEventListener("change", () => {
+    state.settings.outputQuality = els.ctlQuality.value;
+    // Invalidate cached export crops — they were rendered at the old DPI/quality.
+    for (const im of state.images) { im.croppedDataUrl = null; im.croppedKey = null; }
+    setStatus(`Export quality: ${QUALITY_PROFILES[state.settings.outputQuality].label}.`);
+  });
 
   // File buttons
   els.btnAdd.addEventListener("click", () => els.fileInput.click());
@@ -179,6 +214,9 @@ function attachEventListeners() {
   els.btnRemove.addEventListener("click", () => removeSelected());
   els.btnClear.addEventListener ("click", () => {
     if (state.images.length && confirm("Remove all photos from the list?")) {
+      for (const im of state.images) {
+        if (im.previewUrl) URL.revokeObjectURL(im.previewUrl);
+      }
       state.images = [];
       state.selectedId = null;
       render();
@@ -226,37 +264,71 @@ async function ingestFiles(fileList) {
     setStatus("No supported image files in that drop.");
     return;
   }
-  showBusy(`Loading ${files.length} image${files.length > 1 ? "s" : ""}…`);
-  try {
-    let done = 0;
-    for (const f of files) {
-      try {
-        const img = await loadImage(f);
-        // Don't pre-generate the export crop — live preview uses raw image
-        // with CSS background-position, which is instant and means dragging
-        // the crop responds immediately. Export will regenerate as needed.
-        state.images.push(img);
-        done++;
-        els.busyText.textContent = `Loaded ${done}/${files.length}…`;
-        // Render incrementally so the user sees progress
-        if (done % 4 === 0) render();
-      } catch (e) {
-        console.error("Failed to load", f.name, e);
-        state.images.push({
-          id: nextId(), file: f, name: f.name,
-          dataUrl: null, croppedDataUrl: null,
-          error: e.message || String(e),
-        });
-      }
-    }
-    if (!state.selectedId && state.images.length) state.selectedId = state.images[0].id;
-    setStatus(`${state.images.length} photo${state.images.length === 1 ? "" : "s"} loaded.`);
-    render();
-  } finally {
-    hideBusy();
+
+  // Push placeholder records immediately so the user sees the items appear in
+  // the list right away. Each placeholder is then hydrated in parallel.
+  const placeholders = files.map((f) => ({
+    id: nextId(), file: f, name: f.name,
+    loading: true,
+    sourceBlob: null, previewUrl: null,
+    w: 0, h: 0,
+    cropAnchor: { x: 0.5, y: 0.5 },
+    croppedDataUrl: null, croppedKey: null,
+  }));
+  state.images.push(...placeholders);
+  if (!state.selectedId && state.images.length) {
+    state.selectedId = state.images.find((i) => i.loading)?.id || state.images[0].id;
   }
+  renderFileList();
+  renderPreview();
+
+  setStatus(`Loading ${files.length} image${files.length > 1 ? "s" : ""}…`);
+
+  // Worker pool — keeps HEIC decode from monopolizing the main thread and
+  // gives a steady stream of completed items rather than a long blank wait.
+  let done = 0;
+  const queue = placeholders.slice();
+  const work = async () => {
+    while (queue.length) {
+      const ph = queue.shift();
+      try {
+        const data = await loadImage(ph.file);
+        Object.assign(ph, data);
+      } catch (e) {
+        console.error("Failed to load", ph.file?.name, e);
+        ph.error = e.message || String(e);
+      }
+      ph.loading = false;
+      done++;
+      setStatus(`Loaded ${done}/${files.length}…`);
+      renderFileList();
+      schedulePreviewRedraw();
+    }
+  };
+  await Promise.all(Array.from({ length: INGEST_CONCURRENCY }, work));
+
+  setStatus(`${state.images.length} photo${state.images.length === 1 ? "" : "s"} loaded.`);
+  render();
 }
 
+// Coalesce preview redraws during bulk ingest so we aren't rebuilding the
+// preview DOM after every single image finishes.
+let _previewRedrawTO = null;
+function schedulePreviewRedraw() {
+  if (_previewRedrawTO) return;
+  _previewRedrawTO = setTimeout(() => {
+    _previewRedrawTO = null;
+    renderPreview();
+  }, 80);
+}
+
+/**
+ * Load + thumbnail an image file. Returns a partial record:
+ *   { sourceBlob, previewUrl, w, h }
+ * sourceBlob is the original (or HEIC-decoded) blob, kept for export-time
+ * cropping. previewUrl is an object URL to a small JPEG thumbnail used for
+ * everything on screen — list, preview cells, crop editor.
+ */
 async function loadImage(file) {
   let blob = file;
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -270,71 +342,96 @@ async function loadImage(file) {
     const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
     blob = Array.isArray(converted) ? converted[0] : converted;
   }
-  const dataUrl = await blobToDataUrl(blob);
-  const { w, h } = await imageDimensions(dataUrl);
+
+  // Decode the source once to get natural dimensions + a downscaled thumbnail.
+  const sourceUrl = URL.createObjectURL(blob);
+  let imgEl;
+  try {
+    imgEl = await loadHtmlImage(sourceUrl);
+  } finally {
+    // Released after we draw the thumbnail below
+  }
+  let previewBlob;
+  try {
+    previewBlob = await makeThumbnailBlob(imgEl, THUMB_MAX_PX, THUMB_JPEG_Q);
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
   return {
-    id: nextId(), file, name: file.name,
-    dataUrl, croppedDataUrl: null, w, h,
-    // Normalized crop anchor — (0.5, 0.5) means centered. Range [0, 1].
-    cropAnchor: { x: 0.5, y: 0.5 },
+    sourceBlob: blob,
+    previewUrl: URL.createObjectURL(previewBlob),
+    w: imgEl.naturalWidth,
+    h: imgEl.naturalHeight,
   };
 }
 
-function blobToDataUrl(blob) {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result);
-    r.onerror = () => rej(r.error);
-    r.readAsDataURL(blob);
-  });
-}
-
-function imageDimensions(src) {
-  return new Promise((res, rej) => {
-    const img = new Image();
-    img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
-    img.onerror = () => rej(new Error("Could not decode image"));
-    img.src = src;
-  });
-}
-
-/** Center-crop (with per-image anchor offset) to a square at print resolution
- *  and cache the result. Only used at export time; live preview just uses
- *  CSS background-position which is instant. */
-async function ensureCrop(image) {
-  if (image.error || !image.dataUrl) return;
-  const key = cropSettingsKey(image);
-  if (image.croppedDataUrl && image.croppedKey === key) return;
-  if (!state.settings.squareCrop) {
-    image.croppedDataUrl = image.dataUrl;
-    image.croppedKey = key;
-    return;
-  }
-  // 300 DPI at the cell size — comfortably above print sharpness threshold
-  const pxPerCm = 300 / 2.54;
-  const sizePx = Math.round(state.settings.cellSizeCm * pxPerCm);
-
-  const img = await loadHtmlImage(image.dataUrl);
-  const srcSize = Math.min(img.naturalWidth, img.naturalHeight);
-  const ax = (image.cropAnchor?.x ?? 0.5);
-  const ay = (image.cropAnchor?.y ?? 0.5);
-  const sx = (img.naturalWidth  - srcSize) * ax;
-  const sy = (img.naturalHeight - srcSize) * ay;
-
+function makeThumbnailBlob(imgEl, maxDim, jpegQ) {
+  const scale = Math.min(1, maxDim / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
+  const w = Math.max(1, Math.round(imgEl.naturalWidth * scale));
+  const h = Math.max(1, Math.round(imgEl.naturalHeight * scale));
   const canvas = document.createElement("canvas");
-  canvas.width = sizePx;
-  canvas.height = sizePx;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, sizePx, sizePx);
-  image.croppedDataUrl = canvas.toDataURL("image/jpeg", 0.92);
-  image.croppedKey = key;
+  ctx.drawImage(imgEl, 0, 0, w, h);
+  return new Promise((res, rej) => {
+    canvas.toBlob((b) => b ? res(b) : rej(new Error("Thumbnail encode failed")),
+                  "image/jpeg", jpegQ);
+  });
 }
 
-function cropSettingsKey(image) {
+/** Generate the export-resolution crop for a single image, cached.
+ *  Only used at export time; live preview uses the thumbnail with
+ *  CSS background-position, which is instant. */
+async function ensureCrop(image) {
+  if (image.error || !image.sourceBlob) return;
+  const profile = QUALITY_PROFILES[state.settings.outputQuality] || QUALITY_PROFILES.print;
+  const key = cropSettingsKey(image, profile);
+  if (image.croppedDataUrl && image.croppedKey === key) return;
+
+  const sizePx = Math.round(state.settings.cellSizeCm * profile.dpi / 2.54);
+  const sourceUrl = URL.createObjectURL(image.sourceBlob);
+  try {
+    const img = await loadHtmlImage(sourceUrl);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    if (state.settings.squareCrop) {
+      // Square center-crop with per-image anchor offset
+      const srcSize = Math.min(img.naturalWidth, img.naturalHeight);
+      const ax = image.cropAnchor?.x ?? 0.5;
+      const ay = image.cropAnchor?.y ?? 0.5;
+      const sx = (img.naturalWidth  - srcSize) * ax;
+      const sy = (img.naturalHeight - srcSize) * ay;
+      canvas.width = sizePx;
+      canvas.height = sizePx;
+      ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, sizePx, sizePx);
+    } else {
+      // Fit-without-cropping: downscale entire image to fit a square at sizePx
+      const s = Math.min(sizePx / img.naturalWidth, sizePx / img.naturalHeight, 1);
+      const w = Math.max(1, Math.round(img.naturalWidth  * s));
+      const h = Math.max(1, Math.round(img.naturalHeight * s));
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(img, 0, 0, w, h);
+    }
+    image.croppedDataUrl = canvas.toDataURL("image/jpeg", profile.jpeg);
+    image.croppedKey = key;
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+function cropSettingsKey(image, profile) {
   const a = image?.cropAnchor || { x: 0.5, y: 0.5 };
-  return `${state.settings.cellSizeCm}@${state.settings.squareCrop}@${a.x.toFixed(4)},${a.y.toFixed(4)}`;
+  const p = profile || QUALITY_PROFILES.print;
+  return `${state.settings.cellSizeCm}@${state.settings.squareCrop}` +
+         `@${a.x.toFixed(4)},${a.y.toFixed(4)}` +
+         `@${p.dpi}@${p.jpeg}`;
 }
 
 function loadHtmlImage(src) {
@@ -372,7 +469,8 @@ function shiftSelection(delta) {
 function removeSelected() {
   const i = selectedIndex();
   if (i < 0) return;
-  state.images.splice(i, 1);
+  const [removed] = state.images.splice(i, 1);
+  if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
   state.selectedId = state.images[i]?.id || state.images[i - 1]?.id || null;
   render();
 }
@@ -457,15 +555,15 @@ function getSelectedImage() {
 
 function renderCropEditor() {
   const im = getSelectedImage();
-  if (!im || !im.dataUrl || im.error || !state.settings.squareCrop) {
+  if (!im || !im.previewUrl || im.error || !state.settings.squareCrop) {
     els.cropEditor.hidden = true;
     return;
   }
   els.cropEditor.hidden = false;
   els.cropName.textContent = im.name;
-  // Show the raw image with cover + anchor position so the visible square
-  // matches the crop that will be exported.
-  els.cropImage.style.backgroundImage = `url(${im.dataUrl})`;
+  // Thumbnail with cover + anchor position so what's visible inside the frame
+  // is exactly what gets exported.
+  els.cropImage.style.backgroundImage = `url(${im.previewUrl})`;
   els.cropImage.style.backgroundSize = "cover";
   els.cropImage.style.backgroundPosition =
     `${(im.cropAnchor.x * 100).toFixed(2)}% ${(im.cropAnchor.y * 100).toFixed(2)}%`;
@@ -478,7 +576,7 @@ function attachCropDragHandlers() {
 
   const begin = (clientX, clientY) => {
     const im = getSelectedImage();
-    if (!im || im.error || !im.dataUrl) return;
+    if (!im || im.error || !im.previewUrl) return;
     _drag = {
       startX: clientX, startY: clientY,
       startAnchor: { ...im.cropAnchor },
@@ -571,6 +669,7 @@ function renderFileList() {
     const li = document.createElement("li");
     li.dataset.id = img.id;
     if (img.id === state.selectedId) li.classList.add("sel");
+    if (img.loading) li.classList.add("loading");
 
     const idx = document.createElement("span");
     idx.className = "idx";
@@ -578,13 +677,13 @@ function renderFileList() {
 
     const thumb = document.createElement("span");
     thumb.className = "thumb";
-    if (img.croppedDataUrl || img.dataUrl) {
-      thumb.style.backgroundImage = `url(${img.croppedDataUrl || img.dataUrl})`;
+    if (img.previewUrl) {
+      thumb.style.backgroundImage = `url(${img.previewUrl})`;
     }
 
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = img.name + (img.error ? "  (failed)" : "");
+    name.textContent = img.name + (img.error ? "  (failed)" : img.loading ? "  (loading…)" : "");
     if (img.error) name.style.color = "var(--warn)";
 
     li.append(idx, thumb, name);
@@ -661,19 +760,23 @@ function renderPreview() {
         cell.dataset.imgId = im.id;
         if (im.id === state.selectedId) cell.classList.add("sel");
 
-        if (im.error || !im.dataUrl) {
+        if (im.error) {
           const err = document.createElement("div");
           err.className = "err";
           err.innerHTML = `⚠<br><small>${escapeHtml(im.name)}</small>`;
           cell.appendChild(err);
+        } else if (!im.previewUrl) {
+          // Still decoding — show a light placeholder so the layout is stable
+          cell.style.background =
+            `repeating-linear-gradient(135deg,#f3f4f7 0 8px,#e5e7ed 8px 16px)`;
         } else {
-          // Use the RAW image with background-size: cover + position derived
-          // from cropAnchor. That way, dragging in the crop editor updates
-          // every cell of this image instantly — no canvas re-render needed.
+          // Use the small thumbnail with background-size: cover + position
+          // derived from cropAnchor. Dragging in the crop editor updates every
+          // preview cell of this image instantly — no canvas re-render needed.
           const ph = document.createElement("div");
           ph.className = "img";
           ph.dataset.imgId = im.id;
-          ph.style.backgroundImage = `url(${im.dataUrl})`;
+          ph.style.backgroundImage = `url(${im.previewUrl})`;
           if (state.settings.squareCrop) {
             const ax = (im.cropAnchor?.x ?? 0.5) * 100;
             const ay = (im.cropAnchor?.y ?? 0.5) * 100;
@@ -713,9 +816,12 @@ async function exportPdf() {
   if (typeof window.jspdf?.jsPDF !== "function") {
     alert("PDF library not loaded. Check your connection and reload."); return;
   }
+  if (state.images.some(im => im.loading)) {
+    if (!confirm("Some images are still loading. Export anyway? They'll be skipped.")) return;
+  }
   showBusy("Building PDF…");
   try {
-    // Make sure every image has a fresh square crop at the current cell size
+    // Make sure every image has a fresh square crop at the current quality
     for (const im of state.images) await ensureCrop(im);
 
     const { jsPDF } = window.jspdf;
@@ -768,6 +874,9 @@ async function exportDocx() {
   if (!state.images.length) { alert("Add some images first."); return; }
   if (typeof window.docx === "undefined") {
     alert("DOCX library not loaded. Check your connection and reload."); return;
+  }
+  if (state.images.some(im => im.loading)) {
+    if (!confirm("Some images are still loading. Export anyway? They'll be skipped.")) return;
   }
   showBusy("Building Word document…");
   try {

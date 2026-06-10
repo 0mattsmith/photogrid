@@ -46,8 +46,12 @@ or any other simple static server (`npx serve`, `caddy file-server`, etc.).
 - **Selection sync.** Click a cell in the preview → its row is selected in the list. Click a row in the list → its cells are highlighted in the preview.
 - **Arrow keys** navigate the grid (Up/Down jump by column count, Left/Right by one).
 - **Multi-page** automatic when image count exceeds rows × columns.
-- **Export to PDF or DOCX** with crops baked in at 300 DPI.
+- **Export to PDF or DOCX**, with an **Export quality** dropdown that works like Word's "Reduce File Size":
+  - *Print* — 300 DPI, q 0.92 (default)
+  - *Reduced* — 200 DPI, q 0.82 (typically 3–5× smaller file)
+  - *Minimum* — 110 DPI, q 0.72 (smallest, screen-only)
 - **HEIC support** via `heic2any` (decodes Apple's iPhone photos in-browser).
+- **Fast ingestion**: photos are decoded in parallel and a small thumbnail is generated for the UI. The full-resolution source is kept in memory only for export, so dragging crops, switching pages, and re-rendering are all instant even with dozens of HEIC images.
 - **Light + dark mode** automatic.
 
 ## Customisation defaults (all editable in the UI)
