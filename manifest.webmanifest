@@ -2,12 +2,22 @@
   "name": "PhotoGrid",
   "short_name": "PhotoGrid",
   "description": "Arrange photos in a printable grid (4×5 by default), export to PDF or Word. All processing happens locally in your browser — nothing is uploaded.",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#f4f5f7",
   "theme_color": "#0a84ff",
+  "categories": ["productivity", "photo"],
+  "lang": "en",
+  "dir": "ltr",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
-  ]
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "screenshots": []
 }

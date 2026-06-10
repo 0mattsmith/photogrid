@@ -10,11 +10,22 @@ You can verify this yourself by opening DevTools → Network while you drop phot
 
 ## Offline
 
-PhotoGrid is a PWA. After your first visit:
+PhotoGrid is a fully installable PWA.
 
-- The app shell and all libraries are cached by a service worker, so it loads and works fully **with no internet connection**.
-- You can install it (Chrome/Edge: "Install app"; Safari iOS: Share → Add to Home Screen) to run it like a native app.
+**To install:**
+
+- **Chrome / Edge / Brave (desktop or Android):** an "Install app" button appears in the top bar once the page passes the install criteria (manifest + service worker + a few seconds of engagement). You can also use the browser's address-bar install icon, or menu → "Install PhotoGrid".
+- **Safari (iOS / iPadOS):** Share → "Add to Home Screen". A tip explaining this appears the first time you visit on an iOS device.
+- **Safari (macOS):** File → "Add to Dock" (Safari 17+).
+- **Firefox:** doesn't currently expose install for normal sites; use Chrome/Edge if you want to install.
+
+Once installed:
+
+- Runs in its own standalone window, no browser chrome.
+- The app shell and every CDN library are cached by a service worker, so it loads and works fully **with no internet connection**.
 - A tiny dot in the top-right shows your connection state — green = online, grey + "offline" label = offline. Either way, the app works the same.
+
+**App icons** are provided as 192 px and 512 px PNGs, plus a maskable variant so the app looks right under Android's adaptive-icon mask, plus an SVG that scales to any size.
 
 ## Quick deploy with the GitHub CLI
 

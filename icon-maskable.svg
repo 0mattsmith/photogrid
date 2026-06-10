@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Full-bleed background so maskable masks don't reveal transparency -->
+  <rect width="512" height="512" fill="#0a84ff"/>
+  <!-- Grid inset into the safe zone (~80% of canvas) so corners can be clipped -->
+  <g fill="#ffffff" opacity="0.95" transform="translate(72, 102) scale(0.72)">
+    <rect x="115" y="78"  width="60" height="60" rx="6"/>
+    <rect x="189" y="78"  width="60" height="60" rx="6"/>
+    <rect x="263" y="78"  width="60" height="60" rx="6"/>
+    <rect x="337" y="78"  width="60" height="60" rx="6"/>
+    <rect x="115" y="152" width="60" height="60" rx="6"/>
+    <rect x="189" y="152" width="60" height="60" rx="6"/>
+    <rect x="263" y="152" width="60" height="60" rx="6"/>
+    <rect x="337" y="152" width="60" height="60" rx="6"/>
+    <rect x="115" y="226" width="60" height="60" rx="6"/>
+    <rect x="189" y="226" width="60" height="60" rx="6"/>
+    <rect x="263" y="226" width="60" height="60" rx="6"/>
+    <rect x="337" y="226" width="60" height="60" rx="6"/>
+    <rect x="115" y="300" width="60" height="60" rx="6"/>
+    <rect x="189" y="300" width="60" height="60" rx="6"/>
+    <rect x="263" y="300" width="60" height="60" rx="6"/>
+    <rect x="337" y="300" width="60" height="60" rx="6"/>
+    <rect x="115" y="374" width="60" height="60" rx="6"/>
+    <rect x="189" y="374" width="60" height="60" rx="6"/>
+    <rect x="263" y="374" width="60" height="60" rx="6"/>
+    <rect x="337" y="374" width="60" height="60" rx="6"/>
+  </g>
+</svg>

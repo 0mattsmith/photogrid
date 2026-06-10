@@ -79,6 +79,54 @@ body {
   }
 }
 
+/* "Install app" button in the top bar — shown only when the browser
+   reports the page is installable (the beforeinstallprompt event fires). */
+.install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.install-btn:hover { filter: brightness(1.07); }
+.install-btn[hidden] { display: none; }
+
+/* iOS Safari install help banner */
+.ios-install-tip {
+  flex: 0 0 auto;
+  background: rgba(10, 132, 255, 0.1);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 18px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ios-install-tip[hidden] { display: none; }
+.ios-install-tip strong { color: var(--accent); }
+.ios-install-tip button {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.ios-install-tip button:hover { color: var(--text); background: transparent; }
+
 /* Tiny dot showing online/offline status. Hover reveals detail. */
 .net-indicator {
   display: inline-block;

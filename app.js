@@ -108,6 +108,9 @@ const els = {
   cropName:    $("cropName"),
   btnResetCrop:$("btnResetCrop"),
   netIndicator:$("netIndicator"),
+  btnInstall:  $("btnInstall"),
+  iosInstallTip: $("iosInstallTip"),
+  btnDismissIosTip: $("btnDismissIosTip"),
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────
@@ -117,8 +120,76 @@ document.addEventListener("DOMContentLoaded", () => {
   attachEventListeners();
   attachCropDragHandlers();
   initNetworkIndicator();
+  initInstallable();
   render();
 });
+
+// ─── PWA install (Chrome/Edge/Android prompt + iOS Safari fallback) ─────
+// On Chromium-family browsers the page can prompt the user to install once
+// the manifest, service worker, and engagement criteria are all satisfied.
+// We hold onto the deferred event and trigger it when the user clicks
+// "Install app". iOS Safari uses Share → Add to Home Screen, which we just
+// document in a dismissable tip on first visit.
+
+let _deferredInstallPrompt = null;
+
+function initInstallable() {
+  // Hide everything in standalone (already installed)
+  const isStandalone =
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+  if (isStandalone) {
+    els.btnInstall.hidden = true;
+    els.iosInstallTip.hidden = true;
+    return;
+  }
+
+  // Chromium-family: catch the deferred prompt
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    _deferredInstallPrompt = e;
+    els.btnInstall.hidden = false;
+  });
+  window.addEventListener("appinstalled", () => {
+    els.btnInstall.hidden = true;
+    els.iosInstallTip.hidden = true;
+    setStatus("App installed. Look for PhotoGrid in your apps.");
+  });
+
+  els.btnInstall.addEventListener("click", async () => {
+    if (!_deferredInstallPrompt) return;
+    els.btnInstall.disabled = true;
+    try {
+      _deferredInstallPrompt.prompt();
+      const { outcome } = await _deferredInstallPrompt.userChoice;
+      if (outcome === "accepted") {
+        els.btnInstall.hidden = true;
+      }
+    } catch (e) {
+      console.warn("install prompt failed", e);
+    } finally {
+      els.btnInstall.disabled = false;
+      _deferredInstallPrompt = null;
+    }
+  });
+
+  // iOS Safari fallback — show the tip once if relevant
+  if (isIosSafari() && !localStorage.getItem("photogrid:iosTipDismissed")) {
+    els.iosInstallTip.hidden = false;
+  }
+  els.btnDismissIosTip.addEventListener("click", () => {
+    els.iosInstallTip.hidden = true;
+    try { localStorage.setItem("photogrid:iosTipDismissed", "1"); } catch (_) {}
+  });
+}
+
+function isIosSafari() {
+  const ua = navigator.userAgent || "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+  return isIOS && isSafari;
+}
 
 // ─── Online/offline indicator ─────────────────────────────────────────────
 // Cosmetic only — the app works the same whether online or offline because

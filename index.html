@@ -8,7 +8,13 @@
   <meta name="theme-color" content="#0a84ff" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="icon.svg" />
-  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="PhotoGrid" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -21,8 +27,18 @@
       100% local — your photos never leave this device
     </span>
     <span class="hint" id="statusBar">Drop photos anywhere to begin</span>
+    <button id="btnInstall" type="button" class="install-btn" hidden>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 1a.75.75 0 0 1 .75.75v6.69l1.97-1.97a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.53A.75.75 0 1 1 5.28 6.47L7.25 8.44V1.75A.75.75 0 0 1 8 1Zm-5.5 12a.75.75 0 0 1 .75.75v.5a.25.25 0 0 0 .25.25h9a.25.25 0 0 0 .25-.25v-.5a.75.75 0 0 1 1.5 0v.5A1.75 1.75 0 0 1 12.5 16h-9A1.75 1.75 0 0 1 1.75 14.25v-.5a.75.75 0 0 1 .75-.75Z"/></svg>
+      Install app
+    </button>
     <span class="net-indicator" id="netIndicator" title="">●</span>
   </header>
+
+  <!-- iOS Safari install help (Safari doesn't support beforeinstallprompt) -->
+  <div class="ios-install-tip" id="iosInstallTip" hidden>
+    <span>To install: tap the <strong>Share</strong> button, then <strong>Add to Home Screen</strong>.</span>
+    <button id="btnDismissIosTip" type="button" aria-label="Dismiss">×</button>
+  </div>
 
   <main class="layout" id="dropTarget">
     <!-- LEFT: file pane -->

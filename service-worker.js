@@ -11,7 +11,7 @@
  * Bump CACHE_VERSION when shipping any asset change so old caches get pruned.
  */
 
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const CACHE_NAME = `photogrid-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -21,6 +21,9 @@ const APP_SHELL = [
   "./app.js",
   "./manifest.webmanifest",
   "./icon.svg",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./icon-maskable-512.png",
 ];
 
 const CDN_LIBS = [
