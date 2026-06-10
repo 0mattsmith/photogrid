@@ -11,7 +11,7 @@
  * Bump CACHE_VERSION when shipping any asset change so old caches get pruned.
  */
 
-const CACHE_VERSION = "v8";
+const CACHE_VERSION = "v9";
 const CACHE_NAME = `photogrid-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -28,7 +28,7 @@ const APP_SHELL = [
 ];
 
 const CDN_LIBS = [
-  "https://cdn.jsdelivr.net/npm/libheif-js@1.18.1/libheif/libheif.js",
+  "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js",
   "https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js",
   "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js",
   "https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js",

@@ -24,7 +24,11 @@
  * tier each photo went through.
  */
 
-const LIBHEIF_URL = "https://cdn.jsdelivr.net/npm/libheif-js@1.18.1/libheif/libheif.js";
+// WASM-backed bundle of libheif. Dramatically faster than the pure-JS
+// implementation in the same package, and pinned to a real published
+// version (1.18.x didn't exist and was 404'ing — which is why HEICs
+// were failing immediately).
+const LIBHEIF_URL = "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js";
 
 function looksLikeHeic(file) {
   const name = (file && file.name) || "";
