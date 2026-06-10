@@ -438,6 +438,71 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-align: right;
 }
 
+/* Custom right-click context menu */
+.context-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow), 0 6px 24px rgba(0,0,0,.18);
+  padding: 4px;
+  font-size: 13px;
+  user-select: none;
+  /* Subtle entrance */
+  transform-origin: top left;
+  animation: ctxIn 80ms ease-out;
+}
+.context-menu[hidden] { display: none; }
+@keyframes ctxIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.context-menu .ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+.context-menu .ctx-item:hover,
+.context-menu .ctx-item:focus {
+  background: var(--accent);
+  color: var(--accent-text);
+  outline: none;
+}
+.context-menu .ctx-item.danger:hover { background: var(--warn); color: white; }
+.context-menu .ctx-item.disabled {
+  color: var(--text-muted);
+  cursor: default;
+  pointer-events: none;
+}
+.context-menu .ctx-item .shortcut {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.context-menu .ctx-item:hover .shortcut,
+.context-menu .ctx-item:focus .shortcut { color: rgba(255,255,255,.85); }
+.context-menu .ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+.context-menu .ctx-header {
+  padding: 4px 10px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
 /* Drag overlay */
 .overlay {
   position: fixed;

@@ -116,6 +116,7 @@ const els = {
   btnInstall:  $("btnInstall"),
   iosInstallTip: $("iosInstallTip"),
   btnDismissIosTip: $("btnDismissIosTip"),
+  contextMenu: $("contextMenu"),
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────
@@ -126,8 +127,184 @@ document.addEventListener("DOMContentLoaded", () => {
   attachCropDragHandlers();
   initNetworkIndicator();
   initInstallable();
+  initContextMenu();
   render();
 });
+
+// ─── Custom context menu ─────────────────────────────────────────────────
+// Replaces the browser's right-click menu with one tailored to the app's
+// actions. The menu is contextual — right-clicking on an image shows
+// image-specific items; right-clicking on empty space shows global actions.
+
+function initContextMenu() {
+  // Suppress the native context menu everywhere on the page
+  document.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showContextMenu(e);
+  });
+  // Close on any other click, scroll, or escape
+  document.addEventListener("click", hideContextMenu);
+  document.addEventListener("scroll", hideContextMenu, true);
+  window.addEventListener("blur", hideContextMenu);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideContextMenu();
+  });
+}
+
+function showContextMenu(event) {
+  const items = buildContextMenuItems(event.target, event);
+  if (!items.length) return;
+
+  const menu = els.contextMenu;
+  menu.replaceChildren();
+  for (const it of items) {
+    if (it.sep) {
+      const sep = document.createElement("div");
+      sep.className = "ctx-sep";
+      menu.appendChild(sep);
+      continue;
+    }
+    if (it.header) {
+      const h = document.createElement("div");
+      h.className = "ctx-header";
+      h.textContent = it.header;
+      menu.appendChild(h);
+      continue;
+    }
+    const el = document.createElement("div");
+    el.className = "ctx-item" + (it.danger ? " danger" : "") + (it.disabled ? " disabled" : "");
+    el.setAttribute("role", "menuitem");
+    el.tabIndex = -1;
+
+    const label = document.createElement("span");
+    label.textContent = it.label;
+    el.appendChild(label);
+
+    if (it.shortcut) {
+      const sc = document.createElement("span");
+      sc.className = "shortcut";
+      sc.textContent = it.shortcut;
+      el.appendChild(sc);
+    }
+    if (!it.disabled) {
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        hideContextMenu();
+        it.action?.();
+      });
+    }
+    menu.appendChild(el);
+  }
+  menu.hidden = false;
+
+  // Position — clamp to viewport so the menu never spills off-screen
+  const margin = 6;
+  menu.style.left = "0px";
+  menu.style.top  = "0px";
+  const { width, height } = menu.getBoundingClientRect();
+  const x = Math.min(event.clientX, window.innerWidth  - width  - margin);
+  const y = Math.min(event.clientY, window.innerHeight - height - margin);
+  menu.style.left = `${Math.max(margin, x)}px`;
+  menu.style.top  = `${Math.max(margin, y)}px`;
+}
+
+function hideContextMenu() {
+  if (els.contextMenu && !els.contextMenu.hidden) els.contextMenu.hidden = true;
+}
+
+/**
+ * Decide which items go in the menu based on what was right-clicked.
+ *   • A photo in the file list (<li>) or a preview cell.
+ *   • The crop editor frame.
+ *   • Anywhere else: global actions.
+ */
+function buildContextMenuItems(target, event) {
+  const items = [];
+
+  // Image context: clicked a list <li> or a preview .cell.filled
+  const li   = target.closest?.("li[data-id]");
+  const cell = target.closest?.(".cell.filled[data-img-id]");
+  const imgId = li?.dataset?.id || cell?.dataset?.imgId;
+  const img = imgId ? state.images.find(i => i.id === imgId) : null;
+
+  if (img) {
+    // Selecting on right-click matches macOS conventions and makes the
+    // following actions feel like they target the clicked item.
+    if (state.selectedId !== img.id) selectImageById(img.id);
+
+    items.push({ header: truncate(img.name, 36) });
+    items.push({
+      label: "Move up", shortcut: "↑",
+      disabled: state.images.indexOf(img) === 0,
+      action: () => shiftSelection(-1),
+    });
+    items.push({
+      label: "Move down", shortcut: "↓",
+      disabled: state.images.indexOf(img) === state.images.length - 1,
+      action: () => shiftSelection(+1),
+    });
+    items.push({
+      label: "Reset crop",
+      disabled: !state.settings.squareCrop,
+      action: () => {
+        img.cropAnchor = { x: 0.5, y: 0.5 };
+        img.croppedDataUrl = null; img.croppedKey = null;
+        renderCropEditor();
+        updatePreviewCellsFor(img);
+      },
+    });
+    items.push({
+      label: "Remove from grid", shortcut: "⌫", danger: true,
+      action: () => removeSelected(),
+    });
+    items.push({ sep: true });
+  }
+
+  // Crop editor frame
+  if (target.closest?.("#cropFrame, #cropImage")) {
+    const sel = getSelectedImage();
+    if (sel) {
+      items.push({
+        label: "Reset this crop",
+        action: () => {
+          sel.cropAnchor = { x: 0.5, y: 0.5 };
+          sel.croppedDataUrl = null; sel.croppedKey = null;
+          renderCropEditor();
+          updatePreviewCellsFor(sel);
+        },
+      });
+      items.push({ sep: true });
+    }
+  }
+
+  // Global actions — always available
+  items.push({
+    label: "Add files…",
+    action: () => els.fileInput.click(),
+  });
+  items.push({
+    label: "Clear all", danger: true,
+    disabled: state.images.length === 0,
+    action: () => els.btnClear.click(),
+  });
+  items.push({ sep: true });
+  items.push({
+    label: "Export PDF…",
+    disabled: state.images.length === 0,
+    action: exportPdf,
+  });
+  items.push({
+    label: "Export Word…",
+    disabled: state.images.length === 0,
+    action: exportDocx,
+  });
+
+  return items;
+}
+
+function truncate(s, n) {
+  return (s && s.length > n) ? s.slice(0, n - 1) + "…" : (s || "");
+}
 
 // ─── PWA install (Chrome/Edge/Android prompt + iOS Safari fallback) ─────
 // On Chromium-family browsers the page can prompt the user to install once
@@ -375,12 +552,35 @@ async function ingestFiles(fileList) {
     ph.loading = false;
     done++;
     setStatus(`Loaded ${done}/${files.length}…`);
-    renderFileList();
+    // Targeted O(1) DOM patch for the one list item that just finished —
+    // avoids rebuilding the entire list after every image completes.
+    patchListItem(ph);
     schedulePreviewRedraw();
   }));
 
   setStatus(`${state.images.length} photo${state.images.length === 1 ? "" : "s"} loaded.`);
   render();
+}
+
+/** Update one list item in place — used during ingest so we don't rebuild the
+ *  whole list (which would be O(N×N) over a batch of N images). */
+function patchListItem(image) {
+  const li = els.fileList.querySelector(`li[data-id="${CSS.escape(image.id)}"]`);
+  if (!li) return;
+  li.classList.toggle("loading", !!image.loading);
+  if (image.previewUrl) {
+    const thumb = li.querySelector(".thumb");
+    if (thumb && thumb.dataset.url !== image.previewUrl) {
+      thumb.style.backgroundImage = `url(${image.previewUrl})`;
+      thumb.dataset.url = image.previewUrl;
+    }
+  }
+  const name = li.querySelector(".name");
+  if (name) {
+    name.textContent = image.name +
+      (image.error ? "  (failed)" : image.loading ? "  (loading…)" : "");
+    name.style.color = image.error ? "var(--warn)" : "";
+  }
 }
 
 // ─── Worker pool ─────────────────────────────────────────────────────────
