@@ -103,19 +103,25 @@ function ensureLibheif() {
 async function decodeWithLibheif(file) {
   const decoder = await ensureLibheif();
   const buffer = await file.arrayBuffer();
-  const decoded = decoder.decode(buffer);
-  if (!decoded || !decoded.length) throw new Error("HEIC file contains no images");
+  // libheif-js's HeifDecoder.decode expects a Uint8Array (an `EmbindString`),
+  // NOT a raw ArrayBuffer. Passing the latter makes the underlying
+  // heif_context_read_from_memory call silently fail and return [].
+  const decoded = decoder.decode(new Uint8Array(buffer));
+  if (!decoded || !decoded.length) {
+    throw new Error("HEIC: libheif returned no images (file may be invalid or unsupported)");
+  }
 
   const image = decoded[0];
   const w = typeof image.get_width  === "function" ? image.get_width()  : image.width;
   const h = typeof image.get_height === "function" ? image.get_height() : image.height;
+  if (!w || !h) throw new Error(`HEIC: invalid dimensions ${w}×${h}`);
 
   const rgba = new Uint8ClampedArray(w * h * 4);
   await new Promise((resolve, reject) => {
     try {
       image.display(
         { data: rgba, width: w, height: h },
-        (out) => out ? resolve() : reject(new Error("libheif display returned null"))
+        (out) => out ? resolve() : reject(new Error("HEIC: libheif display returned null"))
       );
     } catch (e) { reject(e); }
   });
