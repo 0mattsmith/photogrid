@@ -11,7 +11,7 @@
  * Bump CACHE_VERSION when shipping any asset change so old caches get pruned.
  */
 
-const CACHE_VERSION = "v10";
+const CACHE_VERSION = "v11";
 const CACHE_NAME = `photogrid-${CACHE_VERSION}`;
 
 const APP_SHELL = [

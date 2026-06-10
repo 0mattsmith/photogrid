@@ -1,34 +1,21 @@
 /*
  * image-worker.js — runs in a Web Worker.
  *
- * Multi-tier decode pipeline so HEIC files don't take forever:
+ * Multi-tier decode pipeline:
+ *   1. createImageBitmap(file) — handles JPG/PNG/WebP/AVIF universally,
+ *      and HEIC on Safari and Chrome-on-macOS (system codec).
+ *   2. ImageDecoder (WebCodecs) — Chrome 94+ via the OS image decoder.
+ *      Very fast when 'image/heic' is supported.
+ *   3. libheif-js (WASM bundle, lazy-loaded) — last resort.
  *
- *   Tier 1  — createImageBitmap(file).
- *             Works for JPG/PNG/WebP/AVIF universally, and for HEIC on
- *             Safari and Chrome-on-macOS (system codec). Essentially free.
- *
- *   Tier 2  — ImageDecoder API.
- *             Chrome 94+ exposes the system image codec via WebCodecs;
- *             when 'image/heic' is supported this decodes a 4032×3024
- *             iPhone photo in tens of milliseconds, vs seconds for WASM.
- *
- *   Tier 3  — libheif-js (WASM).
- *             Last-resort fallback for browsers with no native HEIC
- *             (Chrome on Windows/Linux, Firefox). Slow but reliable.
- *             Cached per worker — we pay the WASM init cost once.
- *
- * Returns to the main thread:
- *   { id, sourceBlob, thumbBlob, w, h, decoder }     // success
- *   { id, error }                                     // failure
- * `decoder` is informational — main thread logs it so you can tell which
- * tier each photo went through.
+ * The worker is heavily logged so it's easy to diagnose any failure from
+ * DevTools → Console.
  */
 
-// WASM-backed bundle of libheif. Dramatically faster than the pure-JS
-// implementation in the same package, and pinned to a real published
-// version (1.18.x didn't exist and was 404'ing — which is why HEICs
-// were failing immediately).
 const LIBHEIF_URL = "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js";
+
+function log(...args)  { try { console.log("[image-worker]", ...args); } catch (_) {} }
+function warn(...args) { try { console.warn("[image-worker]", ...args); } catch (_) {} }
 
 function looksLikeHeic(file) {
   const name = (file && file.name) || "";
@@ -38,10 +25,7 @@ function looksLikeHeic(file) {
   return heicExts.includes(ext) || heicMimes.includes(file?.type || "");
 }
 
-// ─── Tier 2: ImageDecoder API (WebCodecs) ────────────────────────────────
-// Some browsers have it, some don't. When they do AND HEIC is supported,
-// it's by far the fastest path.
-
+// ─── Tier 2: ImageDecoder API ────────────────────────────────────────────
 const _imageDecoderTypeCache = new Map();
 async function imageDecoderSupports(type) {
   if (typeof ImageDecoder === "undefined") return false;
@@ -62,8 +46,6 @@ async function decodeWithImageDecoder(file) {
   const decoder = new ImageDecoder({ data: file.stream(), type });
   try {
     const { image } = await decoder.decode();
-    // image is a VideoFrame; createImageBitmap converts it to an ImageBitmap
-    // (it can also be drawn directly to a canvas).
     const bitmap = await createImageBitmap(image);
     image.close && image.close();
     return bitmap;
@@ -73,48 +55,71 @@ async function decodeWithImageDecoder(file) {
 }
 
 // ─── Tier 3: libheif-js (WASM) ───────────────────────────────────────────
-// Lazy-load once per worker. The HeifDecoder instance is reused.
+// Lazy-loaded. Resolves to an initialized libheif module with HeifDecoder.
 
 let _libheifReady = null;
-let _heifDecoder = null;
 
 function ensureLibheif() {
   if (_libheifReady) return _libheifReady;
   _libheifReady = (async () => {
-    importScripts(LIBHEIF_URL);
+    log("loading libheif from", LIBHEIF_URL);
+    try {
+      importScripts(LIBHEIF_URL);
+    } catch (e) {
+      throw new Error(`libheif importScripts failed: ${e.message || e}`);
+    }
     if (typeof libheif === "undefined") {
-      throw new Error("libheif failed to load");
+      throw new Error("libheif global not defined after importScripts");
     }
-    let mod = libheif;
+    log("libheif loaded. typeof:", typeof libheif);
+
+    let mod;
     if (typeof libheif === "function") {
+      log("calling libheif() factory…");
       mod = await libheif();
+      log("libheif() resolved. keys:", Object.keys(mod || {}).slice(0, 8).join(", "));
       self.libheif = mod;
-    } else if (libheif.ready && typeof libheif.ready.then === "function") {
-      await libheif.ready;
+    } else if (libheif && typeof libheif === "object") {
+      mod = libheif;
+      if (libheif.ready && typeof libheif.ready.then === "function") {
+        log("awaiting libheif.ready…");
+        await libheif.ready;
+      }
+    } else {
+      throw new Error(`libheif is unexpected type: ${typeof libheif}`);
     }
-    const Decoder = mod.HeifDecoder || (mod.default && mod.default.HeifDecoder);
-    if (!Decoder) throw new Error("libheif: HeifDecoder not found");
-    _heifDecoder = new Decoder();
-    return _heifDecoder;
-  })();
+
+    const Decoder = mod.HeifDecoder
+      || (mod.default && mod.default.HeifDecoder);
+    if (!Decoder) {
+      const seen = Object.keys(mod || {}).slice(0, 20).join(", ");
+      throw new Error(`HeifDecoder not exported from libheif. Saw: ${seen}`);
+    }
+    log("libheif init OK — HeifDecoder available");
+    return Decoder;
+  })().catch((e) => {
+    // Reset so we can try again next time
+    _libheifReady = null;
+    throw e;
+  });
   return _libheifReady;
 }
 
 async function decodeWithLibheif(file) {
-  const decoder = await ensureLibheif();
+  const Decoder = await ensureLibheif();
+  log("decode start:", file.name, "type:", file.type);
+  const decoder = new Decoder();
   const buffer = await file.arrayBuffer();
-  // libheif-js's HeifDecoder.decode expects a Uint8Array (an `EmbindString`),
-  // NOT a raw ArrayBuffer. Passing the latter makes the underlying
-  // heif_context_read_from_memory call silently fail and return [].
+  // libheif's HeifDecoder.decode requires a Uint8Array (not a raw ArrayBuffer)
   const decoded = decoder.decode(new Uint8Array(buffer));
   if (!decoded || !decoded.length) {
-    throw new Error("HEIC: libheif returned no images (file may be invalid or unsupported)");
+    throw new Error("HEIC: libheif returned no images (file may be unsupported)");
   }
-
   const image = decoded[0];
   const w = typeof image.get_width  === "function" ? image.get_width()  : image.width;
   const h = typeof image.get_height === "function" ? image.get_height() : image.height;
   if (!w || !h) throw new Error(`HEIC: invalid dimensions ${w}×${h}`);
+  log("decoded HEIC:", w, "×", h);
 
   const rgba = new Uint8ClampedArray(w * h * 4);
   await new Promise((resolve, reject) => {
@@ -155,32 +160,30 @@ self.onmessage = async (e) => {
   const { id, file, thumbMax, thumbQ } = e.data || {};
   if (!id) return;
   const t0 = performance.now();
-  let bitmap, sourceBlob = file, tier = "native";
+  let bitmap, sourceBlob = file, tier = "none";
 
   try {
-    // Tier 1 — fastest path, also handles all common formats.
     try {
       bitmap = await createImageBitmap(file);
       tier = "createImageBitmap";
-    } catch (_) {
-      // Tier 2 — ImageDecoder API. Especially good for HEIC on Chrome/Edge.
+    } catch (eBitmap) {
+      log(`createImageBitmap failed for ${file.name}: ${eBitmap.message || eBitmap}`);
       if (looksLikeHeic(file)) {
         try {
           bitmap = await decodeWithImageDecoder(file);
           if (bitmap) tier = "ImageDecoder";
-        } catch (_) { /* fall through to libheif */ }
+        } catch (eDec) {
+          log(`ImageDecoder failed for ${file.name}: ${eDec.message || eDec}`);
+        }
       }
     }
 
-    // Tier 3 — WASM libheif. Slow but reliable.
     if (!bitmap) {
       if (!looksLikeHeic(file)) {
         throw new Error(`Format not supported: ${file.name}`);
       }
       bitmap = await decodeWithLibheif(file);
       tier = "libheif";
-      // Re-encode as JPEG so the export pipeline has a usable blob (the
-      // raw HEIC original can't be drawn on a canvas in the main thread).
       sourceBlob = await reencodeBitmapAsJpeg(bitmap, 0.92);
     }
 
@@ -189,12 +192,11 @@ self.onmessage = async (e) => {
     const thumbBlob = await makeThumbBlob(bitmap, thumbMax, thumbQ);
     bitmap.close && bitmap.close();
     const took = Math.round(performance.now() - t0);
+    log(`OK ${file.name}: ${tier}, ${took}ms`);
     self.postMessage({ id, sourceBlob, thumbBlob, w, h, decoder: tier, took });
   } catch (err) {
-    self.postMessage({
-      id,
-      error: (err && (err.message || String(err))) || "Decode failed",
-      tier,
-    });
+    const msg = (err && (err.message || String(err))) || "Decode failed";
+    warn(`FAILED ${file.name}: ${msg} (tier=${tier})`);
+    self.postMessage({ id, error: msg, tier });
   }
 };
