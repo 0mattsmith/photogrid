@@ -64,8 +64,13 @@ const QUALITY_PROFILES = {
 const THUMB_MAX_PX = 800;
 const THUMB_JPEG_Q = 0.85;
 
-// Image ingestion concurrency — too high and HEIC decode contends with itself.
-const INGEST_CONCURRENCY = 3;
+// Worker pool — image decoding happens off the main thread so the UI stays
+// responsive even while a batch of HEICs is being chewed through. Size scales
+// with the user's CPU but caps so we don't load multiple WASM instances.
+const WORKER_POOL_SIZE = Math.max(
+  2,
+  Math.min(4, (navigator.hardwareConcurrency || 4) - 1)
+);
 
 let _idCounter = 0;
 const nextId = () => `img_${++_idCounter}`;
@@ -355,31 +360,115 @@ async function ingestFiles(fileList) {
 
   setStatus(`Loading ${files.length} image${files.length > 1 ? "s" : ""}…`);
 
-  // Worker pool — keeps HEIC decode from monopolizing the main thread and
-  // gives a steady stream of completed items rather than a long blank wait.
+  // Dispatch every file to the worker pool. Workers run on separate threads
+  // so the UI stays interactive — you can scroll, drag, change settings,
+  // even reorder finished items while later items are still decoding.
   let done = 0;
-  const queue = placeholders.slice();
-  const work = async () => {
-    while (queue.length) {
-      const ph = queue.shift();
-      try {
-        const data = await loadImage(ph.file);
-        Object.assign(ph, data);
-      } catch (e) {
-        console.error("Failed to load", ph.file?.name, e);
-        ph.error = e.message || String(e);
-      }
-      ph.loading = false;
-      done++;
-      setStatus(`Loaded ${done}/${files.length}…`);
-      renderFileList();
-      schedulePreviewRedraw();
+  await Promise.all(placeholders.map(async (ph) => {
+    try {
+      const data = await loadImageInWorker(ph.file);
+      Object.assign(ph, data);
+    } catch (e) {
+      console.error("Failed to load", ph.file?.name, e);
+      ph.error = e.message || String(e);
     }
-  };
-  await Promise.all(Array.from({ length: INGEST_CONCURRENCY }, work));
+    ph.loading = false;
+    done++;
+    setStatus(`Loaded ${done}/${files.length}…`);
+    renderFileList();
+    schedulePreviewRedraw();
+  }));
 
   setStatus(`${state.images.length} photo${state.images.length === 1 ? "" : "s"} loaded.`);
   render();
+}
+
+// ─── Worker pool ─────────────────────────────────────────────────────────
+
+let _workers = null;
+let _workerRR = 0;
+const _workerPending = new Map();
+let _workerSeq = 0;
+
+function getWorkerPool() {
+  if (_workers) return _workers;
+  _workers = [];
+  for (let i = 0; i < WORKER_POOL_SIZE; i++) {
+    let worker;
+    try {
+      worker = new Worker("image-worker.js");
+    } catch (e) {
+      console.warn("Worker construction failed:", e);
+      break;
+    }
+    worker.onmessage = (e) => {
+      const { id, error, ...rest } = e.data || {};
+      const pending = _workerPending.get(id);
+      if (!pending) return;
+      _workerPending.delete(id);
+      if (error) pending.reject(new Error(error));
+      else pending.resolve(rest);
+    };
+    worker.onerror = (e) => {
+      console.error("Worker error:", e);
+    };
+    _workers.push(worker);
+  }
+  return _workers;
+}
+
+/**
+ * Send a file to the next worker (round-robin) and return its decoded
+ * source blob + thumbnail blob + natural dimensions.
+ *
+ * Falls back to main-thread decoding if Worker construction failed
+ * (e.g., page opened from file:// without a server, or very old browser).
+ */
+async function loadImageInWorker(file) {
+  const pool = getWorkerPool();
+  if (!pool.length) return loadImageOnMainThread(file);
+
+  const worker = pool[_workerRR++ % pool.length];
+  const id = ++_workerSeq;
+  const result = await new Promise((resolve, reject) => {
+    _workerPending.set(id, { resolve, reject });
+    try {
+      worker.postMessage({ id, file, thumbMax: THUMB_MAX_PX, thumbQ: THUMB_JPEG_Q });
+    } catch (e) {
+      _workerPending.delete(id);
+      reject(e);
+    }
+  });
+  return {
+    sourceBlob: result.sourceBlob,
+    previewUrl: URL.createObjectURL(result.thumbBlob),
+    w: result.w,
+    h: result.h,
+  };
+}
+
+/** Main-thread fallback used when Web Workers aren't available. */
+async function loadImageOnMainThread(file) {
+  let blob = file;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (_) {
+    if (!(/\.(heic|heif|hif|heics|heifs)$/i.test(file.name) ||
+          /^image\/heic|^image\/heif/.test(file.type))) {
+      throw new Error("Image format not supported.");
+    }
+    if (typeof heic2any !== "function") {
+      throw new Error("HEIC decoder not loaded.");
+    }
+    const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+    blob = Array.isArray(converted) ? converted[0] : converted;
+    bitmap = await createImageBitmap(blob);
+  }
+  const w = bitmap.width, h = bitmap.height;
+  const thumb = await makeThumbnailBlob(bitmap, THUMB_MAX_PX, THUMB_JPEG_Q);
+  bitmap.close?.();
+  return { sourceBlob: blob, previewUrl: URL.createObjectURL(thumb), w, h };
 }
 
 // Coalesce preview redraws during bulk ingest so we aren't rebuilding the
@@ -394,59 +483,25 @@ function schedulePreviewRedraw() {
 }
 
 /**
- * Load + thumbnail an image file. Returns a partial record:
- *   { sourceBlob, previewUrl, w, h }
- * sourceBlob is the original (or HEIC-decoded) blob, kept for export-time
- * cropping. previewUrl is an object URL to a small JPEG thumbnail used for
- * everything on screen — list, preview cells, crop editor.
+ * Generate a JPEG thumbnail Blob from a decoded ImageBitmap (or an
+ * HTMLImageElement, since both expose width/height and can be drawImage'd).
+ *
+ * Used by the main-thread fallback path. The worker path uses OffscreenCanvas
+ * inside the worker itself, see image-worker.js.
  */
-async function loadImage(file) {
-  let blob = file;
-  const ext = (file.name.split(".").pop() || "").toLowerCase();
-  const isHeic = ext === "heic" || ext === "heif" || ext === "hif" ||
-                 ext === "heics" || ext === "heifs" ||
-                 file.type === "image/heic" || file.type === "image/heif";
-  if (isHeic) {
-    if (typeof heic2any !== "function") {
-      throw new Error("HEIC decoder not loaded — check your internet connection and reload.");
-    }
-    const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
-    blob = Array.isArray(converted) ? converted[0] : converted;
-  }
-
-  // Decode the source once to get natural dimensions + a downscaled thumbnail.
-  const sourceUrl = URL.createObjectURL(blob);
-  let imgEl;
-  try {
-    imgEl = await loadHtmlImage(sourceUrl);
-  } finally {
-    // Released after we draw the thumbnail below
-  }
-  let previewBlob;
-  try {
-    previewBlob = await makeThumbnailBlob(imgEl, THUMB_MAX_PX, THUMB_JPEG_Q);
-  } finally {
-    URL.revokeObjectURL(sourceUrl);
-  }
-  return {
-    sourceBlob: blob,
-    previewUrl: URL.createObjectURL(previewBlob),
-    w: imgEl.naturalWidth,
-    h: imgEl.naturalHeight,
-  };
-}
-
-function makeThumbnailBlob(imgEl, maxDim, jpegQ) {
-  const scale = Math.min(1, maxDim / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
-  const w = Math.max(1, Math.round(imgEl.naturalWidth * scale));
-  const h = Math.max(1, Math.round(imgEl.naturalHeight * scale));
+function makeThumbnailBlob(src, maxDim, jpegQ) {
+  const srcW = src.width ?? src.naturalWidth;
+  const srcH = src.height ?? src.naturalHeight;
+  const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(imgEl, 0, 0, w, h);
+  ctx.drawImage(src, 0, 0, w, h);
   return new Promise((res, rej) => {
     canvas.toBlob((b) => b ? res(b) : rej(new Error("Thumbnail encode failed")),
                   "image/jpeg", jpegQ);
