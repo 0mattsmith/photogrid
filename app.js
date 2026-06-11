@@ -64,6 +64,12 @@ const QUALITY_PROFILES = {
 const THUMB_MAX_PX = 800;
 const THUMB_JPEG_Q = 0.85;
 
+// Crop zoom: 1 = cover fit (smaller image dimension matches the cell),
+// values >1 zoom in (less of the image is visible in the square).
+const CROP_ZOOM_MIN  = 1.0;
+const CROP_ZOOM_MAX  = 4.0;
+const CROP_ZOOM_STEP = 0.15;
+
 // Worker pool — image decoding happens off the main thread so the UI stays
 // responsive even while a batch of HEICs is being chewed through. Size scales
 // with the user's CPU but caps so we don't load multiple WASM instances.
@@ -112,6 +118,9 @@ const els = {
   cropImage:   $("cropImage"),
   cropName:    $("cropName"),
   btnResetCrop:$("btnResetCrop"),
+  btnZoomIn:   $("btnZoomIn"),
+  btnZoomOut:  $("btnZoomOut"),
+  zoomLabel:   $("zoomLabel"),
   netIndicator:$("netIndicator"),
   btnInstall:  $("btnInstall"),
   iosInstallTip: $("iosInstallTip"),
@@ -526,6 +535,7 @@ async function ingestFiles(fileList) {
     sourceBlob: null, previewUrl: null,
     w: 0, h: 0,
     cropAnchor: { x: 0.5, y: 0.5 },
+    cropZoom: 1,
     croppedDataUrl: null, croppedKey: null,
   }));
   state.images.push(...placeholders);
@@ -781,8 +791,12 @@ async function ensureCrop(image) {
     ctx.imageSmoothingQuality = "high";
 
     if (state.settings.squareCrop) {
-      // Square center-crop with per-image anchor offset
-      const srcSize = Math.min(img.naturalWidth, img.naturalHeight);
+      // Square center-crop with per-image anchor offset and zoom.
+      // At zoom=1 we sample the largest square that fits in the image
+      // (cover behavior). Higher zoom = sample a smaller square = the
+      // exported image shows less of the source.
+      const zoom = Math.max(CROP_ZOOM_MIN, image.cropZoom || 1);
+      const srcSize = Math.min(img.naturalWidth, img.naturalHeight) / zoom;
       const ax = image.cropAnchor?.x ?? 0.5;
       const ay = image.cropAnchor?.y ?? 0.5;
       const sx = (img.naturalWidth  - srcSize) * ax;
@@ -808,9 +822,10 @@ async function ensureCrop(image) {
 
 function cropSettingsKey(image, profile) {
   const a = image?.cropAnchor || { x: 0.5, y: 0.5 };
+  const z = image?.cropZoom || 1;
   const p = profile || QUALITY_PROFILES.print;
   return `${state.settings.cellSizeCm}@${state.settings.squareCrop}` +
-         `@${a.x.toFixed(4)},${a.y.toFixed(4)}` +
+         `@${a.x.toFixed(4)},${a.y.toFixed(4)}@${z.toFixed(3)}` +
          `@${p.dpi}@${p.jpeg}`;
 }
 
@@ -941,12 +956,36 @@ function renderCropEditor() {
   }
   els.cropEditor.hidden = false;
   els.cropName.textContent = im.name;
-  // Thumbnail with cover + anchor position so what's visible inside the frame
-  // is exactly what gets exported.
   els.cropImage.style.backgroundImage = `url(${im.previewUrl})`;
-  els.cropImage.style.backgroundSize = "cover";
-  els.cropImage.style.backgroundPosition =
-    `${(im.cropAnchor.x * 100).toFixed(2)}% ${(im.cropAnchor.y * 100).toFixed(2)}%`;
+  applyCropStyle(els.cropImage, im);
+
+  const zoom = im.cropZoom || 1;
+  els.zoomLabel.textContent = `Zoom: ${Math.round(zoom * 100)}%`;
+  els.btnZoomOut.disabled = zoom <= CROP_ZOOM_MIN + 1e-6;
+  els.btnZoomIn .disabled = zoom >= CROP_ZOOM_MAX - 1e-6;
+}
+
+/**
+ * Apply the current crop crop anchor + zoom to a background-image element.
+ * Using CSS background-size + background-position lets the crop respond to
+ * pan/zoom in real time without re-rendering any pixels.
+ *
+ * At zoom = 1 the smaller image dimension matches the cell exactly (cover);
+ * higher zoom scales the image larger so the cell shows less of it.
+ */
+function applyCropStyle(el, im) {
+  const zoom = Math.max(CROP_ZOOM_MIN, im.cropZoom || 1);
+  const ratio = (im.w || 1) / (im.h || 1);
+  if (ratio <= 1) {
+    // Portrait or square — limit width to the cell, height overflows.
+    el.style.backgroundSize = `${zoom * 100}% auto`;
+  } else {
+    // Landscape — limit height to the cell, width overflows.
+    el.style.backgroundSize = `auto ${zoom * 100}%`;
+  }
+  const ax = (im.cropAnchor?.x ?? 0.5) * 100;
+  const ay = (im.cropAnchor?.y ?? 0.5) * 100;
+  el.style.backgroundPosition = `${ax.toFixed(2)}% ${ay.toFixed(2)}%`;
 }
 
 // Drag-to-pan inside the crop frame
@@ -962,6 +1001,7 @@ function attachCropDragHandlers() {
       startAnchor: { ...im.cropAnchor },
       frame: frame.getBoundingClientRect(),
       imgW: im.w, imgH: im.h,
+      zoom: Math.max(CROP_ZOOM_MIN, im.cropZoom || 1),
       id: im.id,
     };
   };
@@ -971,20 +1011,25 @@ function attachCropDragHandlers() {
     if (!im) return;
     const dx = clientX - _drag.startX;
     const dy = clientY - _drag.startY;
-    // Background-size: cover behavior:
-    //   For each axis, the scaled image extends past the frame by
-    //     overflow_axis = frame_axis * (other_dim/this_dim - 1)
-    //   only on the LONGER axis. Pan range (px) = overflow_axis.
-    //   bg-position percent moves the image by overflow at 100%.
+    // Pan math, factoring in zoom. At zoom z and frame size F (square):
+    //   portrait  (W ≤ H):  scaledW = F·z,            scaledH = F·z·(H/W)
+    //   landscape (W >  H): scaledW = F·z·(W/H),      scaledH = F·z
+    // Overflow on each axis = scaled - F; that's the pan range in pixels.
+    // bg-position percent moves the image by overflow at 100%.
     let dax = 0, day = 0;
     const W = _drag.imgW, H = _drag.imgH;
-    if (W < H) {
-      const overflowY = _drag.frame.height * (H / W - 1);
-      if (overflowY > 0) day = -dy / overflowY;
-    } else if (H < W) {
-      const overflowX = _drag.frame.width * (W / H - 1);
-      if (overflowX > 0) dax = -dx / overflowX;
+    const F = _drag.frame.width;
+    const z = _drag.zoom;
+    let overflowX, overflowY;
+    if (W <= H) {
+      overflowX = F * (z - 1);
+      overflowY = F * (z * H / W - 1);
+    } else {
+      overflowX = F * (z * W / H - 1);
+      overflowY = F * (z - 1);
     }
+    if (overflowX > 0) dax = -dx / overflowX;
+    if (overflowY > 0) day = -dy / overflowY;
     im.cropAnchor.x = clamp(_drag.startAnchor.x + dax, 0, 1);
     im.cropAnchor.y = clamp(_drag.startAnchor.y + day, 0, 1);
     // Invalidate cached export crop
@@ -1026,20 +1071,42 @@ function attachCropDragHandlers() {
     const im = getSelectedImage();
     if (!im) return;
     im.cropAnchor = { x: 0.5, y: 0.5 };
+    im.cropZoom = 1;
     im.croppedDataUrl = null; im.croppedKey = null;
     renderCropEditor();
     updatePreviewCellsFor(im);
   });
+
+  els.btnZoomIn .addEventListener("click", () => adjustZoom(+CROP_ZOOM_STEP));
+  els.btnZoomOut.addEventListener("click", () => adjustZoom(-CROP_ZOOM_STEP));
+
+  // Scroll-wheel zoom over the crop frame
+  frame.addEventListener("wheel", (e) => {
+    if (!getSelectedImage()) return;
+    e.preventDefault();
+    // Trackpad gestures send small deltaY; mouse wheel sends ~100.
+    // Normalize to ±1 step per tick.
+    const dir = e.deltaY < 0 ? +1 : -1;
+    const mag = Math.min(1, Math.abs(e.deltaY) / 60);
+    adjustZoom(dir * CROP_ZOOM_STEP * mag);
+  }, { passive: false });
+}
+
+function adjustZoom(delta) {
+  const im = getSelectedImage();
+  if (!im) return;
+  const next = clamp((im.cropZoom || 1) + delta, CROP_ZOOM_MIN, CROP_ZOOM_MAX);
+  if (next === (im.cropZoom || 1)) return;
+  im.cropZoom = next;
+  im.croppedDataUrl = null; im.croppedKey = null;
+  renderCropEditor();
+  updatePreviewCellsFor(im);
 }
 
 /** Live-update every preview cell that shows a given image — no full re-render. */
 function updatePreviewCellsFor(im) {
-  const ax = (im.cropAnchor.x * 100).toFixed(2);
-  const ay = (im.cropAnchor.y * 100).toFixed(2);
   els.preview.querySelectorAll(`.img[data-img-id="${CSS.escape(im.id)}"]`)
-    .forEach((node) => {
-      node.style.backgroundPosition = `${ax}% ${ay}%`;
-    });
+    .forEach((node) => applyCropStyle(node, im));
 }
 
 function renderFileList() {
@@ -1158,10 +1225,7 @@ function renderPreview() {
           ph.dataset.imgId = im.id;
           ph.style.backgroundImage = `url(${im.previewUrl})`;
           if (state.settings.squareCrop) {
-            const ax = (im.cropAnchor?.x ?? 0.5) * 100;
-            const ay = (im.cropAnchor?.y ?? 0.5) * 100;
-            ph.style.backgroundSize = "cover";
-            ph.style.backgroundPosition = `${ax}% ${ay}%`;
+            applyCropStyle(ph, im);
           } else {
             ph.style.backgroundSize = "contain";
             ph.style.backgroundPosition = "center";

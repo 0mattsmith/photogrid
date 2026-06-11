@@ -66,9 +66,12 @@
         <div class="crop-frame" id="cropFrame">
           <div class="crop-image" id="cropImage"></div>
         </div>
-        <div class="btn-row">
-          <button id="btnResetCrop" type="button">Reset crop</button>
+        <div class="btn-row crop-buttons">
+          <button id="btnZoomOut" type="button" class="zoom-btn" title="Zoom out (scroll wheel)" aria-label="Zoom out">−</button>
+          <button id="btnResetCrop" type="button" class="reset-btn">Reset crop</button>
+          <button id="btnZoomIn"  type="button" class="zoom-btn" title="Zoom in (scroll wheel)" aria-label="Zoom in">+</button>
         </div>
+        <div class="zoom-label" id="zoomLabel">Zoom: 100%</div>
       </section>
     </aside>
 

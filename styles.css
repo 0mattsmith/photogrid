@@ -300,6 +300,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   touch-action: none;
 }
 .crop-frame:active { cursor: grabbing; }
+.crop-buttons .zoom-btn {
+  flex: 0 0 36px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+}
+.crop-buttons .reset-btn { flex: 1 1 auto; }
+.zoom-label {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 .crop-image {
   position: absolute;
   inset: 0;
